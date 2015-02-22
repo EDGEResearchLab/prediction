@@ -5,23 +5,19 @@ import urllib
 import urllib2
 import string
 import xml.etree.ElementTree as ET
-from NmeaReader import get_points
-
-NMEAFILE = "./logs/out.log"
-groundLevel = 1463 #m
-payloadWeight = 12 #lbs
-adaptiveWeightCorrection = 0 #+/- difference in lbs (actually compensates for wrong drag coefficients as well)
-
-#parachuteDiagonal=
+#from NmeaReader import get_points
+from import_csv import get_csv_points
 
 
 class PayloadStatus:
     """docstring for PayloadStatus"""
-    def __init__(self, location, time, speed = 0, ascentRate = 0):
+    def __init__(self, location, time, speed = 0, ascentRate = 0, actualWeight = 1):
         self.location = location
         self.time = time
         self.speed = speed
         self.ascentRate = ascentRate
+        self.actualWeight = actualWeight;
+        self.apparentWeight = self.actualWeight;
 
     def isFalling(self):
         if (self.ascentRate < -4):            ###Falling constant?
@@ -51,37 +47,6 @@ class Wind:
         self.bearing = bearing
         self.altitude = altitude
 
-    def windAloft(self):                                            # Returns the wind values in form of wind aloft as described 
-        waBearing = math.round(self.bearing/10)
-        waVelocity = self.velocity
-        if (waVelocity > 99):                                   # if the wind speed is +100 knots weird things happen as we only have 2 digits to represent
-            waBearing += 50                                     # Wildy contrived + 50 to the 2 digit degrees
-            waVelocity -= 100                                   
-            if (waVelocity > 99):
-                waVelocity=99                                   # yes the maximum represntable wind speed is 199 knots
-        return (waBearing * 100 + waVelocity)
-
-    def windAloftAltitude(self):
-        return altitude
-
-    def setByWindAloft(self,windAloftform,altitude=None):           #Sets the wind velocity, bearing, and alt. by wind aloft string
-        windAloftform = str(windAloftform)[:4]                  # Make it a string and grab just the first 4 digits
-        self.bearing = int(windAloftform[:2]) * 10
-        self.velocity = int (windAloftform[2:4])
-        if (self.bearing > 360):
-            self.bearing -= 500
-            self.velocity += 100
-        self.altitude = altitude
-
-    def setByLatLngTimeAtAlt(self, latStep, lngStep, timeStep, alt):        # k making crap fast - deltas lagStep lngStep timeStep in sec - at actual alt
-        #1/60 of an arc = 1 knot
-        # Please make this correct and not a guess  - though for empirical uses it will be fine
-        x = (latStep/60.0) * 3600.0/timeStep
-        y = (lngStep/60.0) * 3600.0/timeStep
-        self.bearing = math.degrees(math.tan(y/x))
-        self.velocity = math.sqrt(y*y + x*x)
-        self.altitude = altitude
-    
     def getLatVelocity(self):
         return math.sin(math.radians(self.bearing)) * self.velocity
 
@@ -115,7 +80,7 @@ class WindString:
                     return interpolateWind(self.winds[i-1], self.winds[i], targetAltitude)
         return self.winds[-1]
 
-def interpolateWind(lowWind, highWind, targetAltitude):         ## OH POOP I'm so bad at python where does this go or how should it be used?
+def interpolateWind(lowWind, highWind, targetAltitude):
     #this is where improvements will be made.  This currently only lineraly interpolates between the two vectors
     ratioOfHighToLow = (targetAltitude - lowWind.altitude) / (highWind.altitude - lowWind.altitude)
     latDelta = (lowWind.getLatVelocity() * (1 - ratioOfHighToLow) ) + (highWind.getLatVelocity() * ratioOfHighToLow)
@@ -123,7 +88,7 @@ def interpolateWind(lowWind, highWind, targetAltitude):         ## OH POOP I'm s
     iVelocity = math.sqrt(latDelta*latDelta + lngDelta*lngDelta) # not what we are doing: highWind.velocity * ratioOfHighToLow + lowWind.velocity * (1 - ratioOfHighToLow)
     iBearing =  computeBearing(latDelta,lngDelta)
     return Wind(iVelocity, iBearing, targetAltitude)
-    #return Wind(lowWind.velocity, lowWind.bearing, targetAltitude) # no crazy interpolation
+    #return Wind(lowWind.velocity, lowWind.bearing, targetAltitude) # no interpolation
 
 
 class PayloadPath:
@@ -131,8 +96,6 @@ class PayloadPath:
     global adaptiveWeightCorrection
     global payloadWeight
     def __init__(self):
-        #super(PayloadPath, self).__init__()
-        #self.arg = arg
         self.path = []
 
     def predictDecsentPath(self, windField, currentStatus):
@@ -145,7 +108,7 @@ class PayloadPath:
                 start -= step
         #descent prediction only
         altDelta = 1.0 # we are really predicting 1m at a time - MEGA RESOLUTION!!!
-        #groundLevel # NEED FUNCTION to get ground alt at guessed landing point
+        groundLevel = 1595 #m # NEED FUNCTION to get ground alt at guessed landing point
         for x in my_range(currentStatus.location.altitude, groundLevel, altDelta):  #lets try this range thing
             timeDelta = altDelta*self.descentTime(self.path[-1])
             latDelta = windField.getWindAtAlt(x).getLatVelocity() * (timeDelta)     #knots / sec
@@ -157,43 +120,26 @@ class PayloadPath:
             nextLocation.addDelta(latDelta,lngDelta,((-1)*altDelta))
             nextTime = self.path[-1].time + timeDelta
             #print nextLocation.latitude, nextLocation.longitude, nextLocation.altitude, nextTime
-            self.path.append(PayloadStatus(nextLocation,nextTime))
+            self.path.append(PayloadStatus(nextLocation,nextTime,0,0,self.path[-1].apparentWeight))
 
-                ######nooo self.path[-1].latitude + latDelta, self.path[-1].longitude + lngDelta, self.path[-1].altitude + altDelta), self.path[-1].t + timeDelta))
-
-        
-    def predictBurst():         ## really not sure this is a function for this class - in fact, it really doesn't belong at all
-        #Predict burst
-        #spit out a guess in meters
-        return 33000
-    def ascentTime(self, payloadStatus):
-        #Predict ascent rate - time traveling through each altitude zone
-            #Adapt ascent rate
-        return 0.5 #.01 sec/meter
     def descentTime(self, payloadStatus):
         #Predict decent rate
         #Adapt decent rate time traveling through each altitude zone
         x = payloadStatus.location.altitude
-        #if x > 5000:
-        #    return (math.log(x) * (-0.05688)) + .32334   #sec/meter .06 
-        #return ((-0.0000004) * x) + 0.152 #sec/meter 0.132 #
-        #return ((-0.0000004) * x) + 0.11464 #sec/meter 0.114 #
-        #print adaptiveWeightCorrection
-        # TODO use better atmosphere model
-        return (1 / descentVelocity(x, payloadWeight + adaptiveWeightCorrection))
+        return (1 / descentVelocity(x, payloadStatus.apparentWeight))
 
-def aparentWeightCorrection(point1, point2):
+def apparentWeightCorrection(point1, point2):
     additionalWeight = 0
     if (point1.isFalling()):
         averageDescentRate = (((point2.ascentRate - point1.ascentRate) / 2.0) + point1.ascentRate) * -1.0
         averageAltitude = (((point2.location.altitude - point1.location.altitude) / 2.0) + point1.location.altitude)
-        additionalWeight = (pow(averageDescentRate,2) * airDensityAtAlt(averageAltitude)) / combinedDragCoefficient(averageAltitude) - payloadWeight
-        if additionalWeight > 25:
-            print "WOAH THERE - You are falling way faster than expected! I'll back the estimated added weight to 10lbs down from" + str(additionalWeight)
-            additionalWeight = 25
-        if additionalWeight < -15:
-            print "WOAH THERE - You are falling way slower than expected! I'll back the estimated added weight to 10lbs down from" + str(additionalWeight)
-            additionalWeight = -15
+        additionalWeight = (pow(averageDescentRate,2) * airDensityAtAlt(averageAltitude)) / combinedDragCoefficient(averageAltitude) - point1.actualWeight
+        if additionalWeight > 20:
+            print "WOAH THERE - You are falling way faster than expected! I'll back the estimated added weight to 20lbs down from" + str(additionalWeight)
+            additionalWeight = 20
+        if additionalWeight < -20:
+            print "WOAH THERE - You are falling way slower than expected! I'll back the estimated added weight to -20lbs down from" + str(additionalWeight)
+            additionalWeight = -20
     return additionalWeight
 
 def combinedDragCoefficient(altitude):
@@ -204,20 +150,25 @@ def combinedDragCoefficient(altitude):
     else:
         return 2.996 #chute open drag =.75 at 4m^2 chute
     
-def airDensityAtAlt(altitude):      #MAGIC
-    altitude = altitude/1000
+def airDensityAtAlt(altitude):      #MAGIC based off NASA's standard day
+    #init to sea level for reference
     density = 1.22 #kg/m3
-    if (altitude<10000):
-        density = (0.0000953350 * math.pow(altitude,2)) - (0.116 * altitude) + 1.23
-    elif (altitude<20000):
-        density = ( -0.0000953 * math.pow(altitude,3)) + (0.00669 * math.pow(altitude,2)) - (0.0167 * altitude) + 1.52
+    kPa = 101 #kPa
+    airTemp = 15.0 #C
+    if (altitude<11000):
+        airTemp = 15.04 - 0.00649 * altitude
+        kPa = 101.29 * math.pow(((airTemp + 273.1)/288.08),5.256)
+    elif (altitude<25000):
+        airTemp = -56.46
+        kPa = 22.65 * math.exp(1.73 - 0.000157 * altitude)
     else:
-        density = ( -0.0000118 * math.pow(altitude,3)) + (0.00132 * math.pow(altitude,2)) - (0.0505 * altitude) + .0661
+        airTemp = -131.21 + 0.00299 * altitude
+        kPa = 2.488 * math.pow(((airTemp + 273.1)/ 216.6),-11.388)
+    density = kPa / (0.2869 * (airTemp + 273.1))
     return density
 
 def descentVelocity(altitude,apparentWeight):
     #print airDensityAtAlt(altitude)
-    #print altitude
     return math.sqrt((combinedDragCoefficient(altitude) * apparentWeight) / airDensityAtAlt(altitude))
     
 def computeBearing(lat,lng):
@@ -270,13 +221,11 @@ def dd2dms(decDegrees):
 
 def formatDMS(dms):
     return (str(dms['Degrees']) + "* " + str(dms['Minutes']) + "' " + str(dms['Seconds']) + '"')
-
 def main():
-    global adaptiveWeightCorrection
-    global payloadWeight
-    #edgeId = sys.argv[1]
+    payloadWeight = 11
 
-    flightPoints = get_points(NMEAFILE)
+    #flightPoints = get_nmea_points(POINTSFILES)
+    flightPoints = get_csv_points(sys.argv[1])
 
     initialLocation = Location(5,5,5)
     windField = WindString()
@@ -290,7 +239,7 @@ def main():
     flight = []
 
     try:
-        for i in range(0,len(flightPoints),10):
+        for i in range(0,len(flightPoints),1):
             dp = flightPoints[i]
             time = dp.time
             speed = 0#dp.speed
@@ -299,22 +248,25 @@ def main():
             alt = dp.altitude
 
             if len(flight) == 0:            #initialize that first one
-                flight.append(PayloadStatus(Location(lat,lng,alt), time, speed, 0))
+                flight.append(PayloadStatus(Location(lat,lng,alt), time, speed, 0, payloadWeight))
             if time != flight[-1].time:
                 #print lat,lng,alt,speed,time
-                flight.append(PayloadStatus(Location(lat,lng,alt), time, speed, findAscentRate(alt,time,flight[-1])))
+                flight.append(PayloadStatus(Location(lat,lng,alt), time, speed, findAscentRate(alt,time,flight[-1]), payloadWeight))
                 if len(flight) > 3:
                     windField.appendWind(measuredWindFromFlightPoints(flight[-2],flight[-1]))
+                    print flight[-1].time - flight[-2].time
                     #print len(windField.winds)
-            else:
-                flight.append(PayloadStatus(Location(lat,lng,alt), time, speed, flight[-1].ascentRate))
+            #else:  #What was I thinking?
+            #    flight.append(PayloadStatus(Location(lat,lng,alt), time, speed, flight[-1].ascentRate))
     
-        #for w in windField.winds:
-        #   print w.velocity, " knots at ", w.bearing, " degrees at", w.altitude, "meters"
+        for w in windField.winds:
+           print w.velocity * 100000, " knots at ", w.bearing, " degrees at", w.altitude, "meters"
 
         if len(flight) > 2:
-            adaptiveWeightCorrection = aparentWeightCorrection(flight[-2],flight[-1]) # MAN MY NAMES ARE THE WORST
+            adaptiveWeightCorrection = apparentWeightCorrection(flight[-2],flight[-1])
             print adaptiveWeightCorrection
+            flight[-1].apparentWeight = flight[-1].actualWeight + adaptiveWeightCorrection
+
 
         descentPrediction = PayloadPath()
         descentPrediction.predictDecsentPath(windField, flight[-1])
