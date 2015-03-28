@@ -133,7 +133,7 @@ def apparentWeightCorrection(point1, point2):
     if (point1.isFalling()):
         averageDescentRate = (((point2.ascentRate - point1.ascentRate) / 2.0) + point1.ascentRate) * -1.0
         averageAltitude = (((point2.location.altitude - point1.location.altitude) / 2.0) + point1.location.altitude)
-        additionalWeight = (pow(averageDescentRate,2) * airDensityAtAlt(averageAltitude)) / combinedDragCoefficient(averageAltitude) - point1.actualWeight
+        additionalWeight = (pow(averageDescentRate,2) * estimatedAirDensityAtAlt(averageAltitude)) / combinedDragCoefficient(averageAltitude) - point1.actualWeight
         if additionalWeight > 20:
             print "WOAH THERE - You are falling way faster than expected! I'll back the estimated added weight to 20lbs down from" + str(additionalWeight)
             additionalWeight = 20
@@ -150,7 +150,7 @@ def combinedDragCoefficient(altitude):
     else:
         return 2.996 #chute open drag =.75 at 4m^2 chute
     
-def airDensityAtAlt(altitude):      #MAGIC based off NASA's standard day
+def monolith_airDensityAtAlt(altitude):      #MAGIC based off NASA's standard day
     #init to sea level for reference
     density = 1.22 #kg/m3
     kPa = 101 #kPa
@@ -167,9 +167,51 @@ def airDensityAtAlt(altitude):      #MAGIC based off NASA's standard day
     density = kPa / (0.2869 * (airTemp + 273.1))
     return density
 
+def estimatedAirTempAtAlt(meters):
+    #MAGIC based off NASA's standard day
+    if (meters<11000):
+        celcius = 15.04 - 0.00649 * meters
+    elif (meters<25000):
+        celcius = -56.46
+    else:
+        celcius = -131.21 + 0.00299 * meters
+    return celcius
+
+def estimatedAirPressureAtAlt(meters, celcius=None):
+    #MAGIC based off NASA's standard day
+    #init to sea level for reference
+    if celcius == None:
+        celcius = estimatedAirTempAtAlt(meters)
+    if (meters<11000):
+        kPa = 101.29 * math.pow(((celcius + 273.1)/288.08), 5.256)
+    elif (meters<25000):
+        kPa = 22.65 * math.exp(1.73 - 0.000157 * meters)
+    else:
+        kPa = 2.488 * math.pow(((celcius + 273.1)/ 216.6), -11.388)
+    return kPa
+
+def estimatedAirDensityAtAlt(meters, celcius=None):
+    #MAGIC based off NASA's standard day
+    #init to sea level for reference
+    if celcius == None:
+        celcius = estimatedAirTempAtAlt(meters)
+    kPa = estimatedAirPressureAtAlt(meters, celcius)
+    kgPm3 = airDensity(kPa,celcius)
+    #TODO Sanity check here and dynamic programming
+    return kgPm3
+
+def airDensity(kPa, celcius):
+    return kPa / (0.2869 * (celcius + 273.1))
+
+def testAir():
+    i = 0
+    while i < 40000:
+        i += 1000
+        print str(i) +" m = "+ str(estimatedAirDensityAtAlt(i))
+
+
 def descentVelocity(altitude,apparentWeight):
-    #print airDensityAtAlt(altitude)
-    return math.sqrt((combinedDragCoefficient(altitude) * apparentWeight) / airDensityAtAlt(altitude))
+    return math.sqrt((combinedDragCoefficient(altitude) * apparentWeight) / estimatedAirDensityAtAlt(altitude))
     
 def computeBearing(lat,lng):
     bearing = 0
@@ -254,7 +296,7 @@ def main():
                 flight.append(PayloadStatus(Location(lat,lng,alt), time, speed, findAscentRate(alt,time,flight[-1]), payloadWeight))
                 if len(flight) > 3:
                     windField.appendWind(measuredWindFromFlightPoints(flight[-2],flight[-1]))
-                    print flight[-1].time - flight[-2].time
+                    #print flight[-1].time - flight[-2].time
                     #print len(windField.winds)
             #else:  #What was I thinking?
             #    flight.append(PayloadStatus(Location(lat,lng,alt), time, speed, flight[-1].ascentRate))
