@@ -1,12 +1,12 @@
 #Prediction
 
 import sys, os, time, math
+import argparse
 import urllib
 import urllib2
 import string
-import xml.etree.ElementTree as ET
-#from NmeaReader import get_points
-from import_csv import get_csv_points
+#import xml.etree.ElementTree as ET
+
 
 
 class PayloadStatus:
@@ -135,10 +135,10 @@ def apparentWeightCorrection(point1, point2):
         averageAltitude = (((point2.location.altitude - point1.location.altitude) / 2.0) + point1.location.altitude)
         additionalWeight = (pow(averageDescentRate,2) * estimatedAirDensityAtAlt(averageAltitude)) / combinedDragCoefficient(averageAltitude) - point1.actualWeight
         if additionalWeight > 20:
-            print "WOAH THERE - You are falling way faster than expected! I'll back the estimated added weight to 20lbs down from" + str(additionalWeight)
+            #print "WOAH THERE - You are falling way faster than expected! I'll back the estimated added weight to 20lbs down from" + str(additionalWeight)
             additionalWeight = 20
         if additionalWeight < -20:
-            print "WOAH THERE - You are falling way slower than expected! I'll back the estimated added weight to -20lbs down from" + str(additionalWeight)
+            #print "WOAH THERE - You are falling way slower than expected! I'll back the estimated added weight to -20lbs down from" + str(additionalWeight)
             additionalWeight = -20
     return additionalWeight
 
@@ -149,23 +149,6 @@ def combinedDragCoefficient(altitude):
         return 4.0 #chute not open drag ~=.5
     else:
         return 2.996 #chute open drag =.75 at 4m^2 chute
-    
-def monolith_airDensityAtAlt(altitude):      #MAGIC based off NASA's standard day
-    #init to sea level for reference
-    density = 1.22 #kg/m3
-    kPa = 101 #kPa
-    airTemp = 15.0 #C
-    if (altitude<11000):
-        airTemp = 15.04 - 0.00649 * altitude
-        kPa = 101.29 * math.pow(((airTemp + 273.1)/288.08),5.256)
-    elif (altitude<25000):
-        airTemp = -56.46
-        kPa = 22.65 * math.exp(1.73 - 0.000157 * altitude)
-    else:
-        airTemp = -131.21 + 0.00299 * altitude
-        kPa = 2.488 * math.pow(((airTemp + 273.1)/ 216.6),-11.388)
-    density = kPa / (0.2869 * (airTemp + 273.1))
-    return density
 
 def estimatedAirTempAtAlt(meters):
     #MAGIC based off NASA's standard day
@@ -237,7 +220,7 @@ def measuredWindFromFlightPoints(point1, point2):
     lngDelta = point2.location.longitude - point1.location.longitude
     avgAltitude = (point2.location.altitude - point1.location.altitude)/2 + point1.location.altitude        #average altitude beteween data addMeasuredWindFromFlightPoint
     bearing = computeBearing(latDelta,lngDelta)
-    velocity = math.sqrt(latDelta * latDelta + lngDelta * lngDelta) / timeStep
+    velocity = math.sqrt(latDelta * latDelta + lngDelta * lngDelta) / timeStep      #close enough to knotts
     #print velocity, bearing, avgAltitude, timeStep
     return Wind(velocity, bearing, avgAltitude)
 
@@ -263,31 +246,67 @@ def dd2dms(decDegrees):
 
 def formatDMS(dms):
     return (str(dms['Degrees']) + "* " + str(dms['Minutes']) + "' " + str(dms['Seconds']) + '"')
-def main():
-    payloadWeight = 11
 
-    #flightPoints = get_nmea_points(POINTSFILES)
-    flightPoints = get_csv_points(sys.argv[1])
+def arguments():
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description='Run a landing predicton for a balloon flight.')
+    parser.add_argument(
+        '--csv',
+        action='store',
+        help='CSV file')
+    parser.add_argument(
+        '--mongo',
+        action='store',
+        help='EDGE ID to query mongo for')
+    parser.add_argument(
+        '--nmea',
+        action='store',
+        help='NMEA file')
+
+    args = parser.parse_args()
+    return args
+
+def main():
+    args = arguments()
+    
+    if args.csv:
+        from import_csv import get_csv_points
+        flightPoints = get_csv_points(args.csv)
+    elif args.nmea:
+        from import_nmea import get_points
+        flightPoints = get_nmea_points(args.nmea)
+    elif args.mongo:
+        from import_mongo import get_mongo_points
+        flightPoints = get_mongo_points(args.mongo)
+    else:
+        flightPoints = sys.argv[1]
+
+    runPrediction(flightPoints)
+
+
+def runPrediction(flightPoints):
+    ''' function does
+    :param flightPoints: array of flight data points like [{lat:#DD#, lng:#DD#, alt:#m#, time:#s#}]
+    '''
+    payloadWeight = 11
 
     initialLocation = Location(5,5,5)
     windField = WindString()
 
     #populate windField
     windField.appendWind(Wind(0,0,0))
-    #do some for loop stuff with some forcast
-
-    #measure winds by flight path
-    # read in flight data points at a time and  create a [] of lat lng, alt, times
+    
     flight = []
 
     try:
         for i in range(0,len(flightPoints),1):
             dp = flightPoints[i]
-            time = dp.time
+            time = dp['time']
             speed = 0#dp.speed
-            lat = dp.latitude
-            lng = dp.longitude
-            alt = dp.altitude
+            lat = dp['latitude']
+            lng = dp['longitude']
+            alt = dp['altitude']
 
             if len(flight) == 0:            #initialize that first one
                 flight.append(PayloadStatus(Location(lat,lng,alt), time, speed, 0, payloadWeight))
@@ -301,12 +320,12 @@ def main():
             #else:  #What was I thinking?
             #    flight.append(PayloadStatus(Location(lat,lng,alt), time, speed, flight[-1].ascentRate))
     
-        for w in windField.winds:
-           print w.velocity * 100000, " knots at ", w.bearing, " degrees at", w.altitude, "meters"
+        #for w in windField.winds:
+        #   print w.velocity * 100000, " knots at ", w.bearing, " degrees at", w.altitude, "meters"
 
         if len(flight) > 2:
             adaptiveWeightCorrection = apparentWeightCorrection(flight[-2],flight[-1])
-            print adaptiveWeightCorrection
+            #print adaptiveWeightCorrection
             flight[-1].apparentWeight = flight[-1].actualWeight + adaptiveWeightCorrection
 
 
@@ -320,7 +339,7 @@ def main():
             }
         #sendPrediction(landingPoint);
         print landingPoint
-        print {'longitude':formatDMS(dd2dms(landingPoint['longitude'])), 'latitude':formatDMS(dd2dms(landingPoint['latitude']))}
+        #print {'longitude':formatDMS(dd2dms(landingPoint['longitude'])), 'latitude':formatDMS(dd2dms(landingPoint['latitude']))}
 
     except IOError as e: # Usually just means that the xml isn't online yet.
         return

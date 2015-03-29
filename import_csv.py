@@ -8,6 +8,8 @@ class flightPoints(object):
         self.latitude = None # dd
         self.longitude = None # dd
         self.altitude = None # meters
+    def __getitem__(self, key):
+        return self.__dict__[key]
 
 def get_csv_points(csvfile):
     csv_points = []
