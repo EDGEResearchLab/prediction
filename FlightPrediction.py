@@ -2,11 +2,11 @@
 
 import sys, os, time, math
 import argparse
+import json
 import urllib
 import urllib2
 import string
 #import xml.etree.ElementTree as ET
-
 
 
 class PayloadStatus:
@@ -328,7 +328,6 @@ def runPrediction(flightPoints):
             #print adaptiveWeightCorrection
             flight[-1].apparentWeight = flight[-1].actualWeight + adaptiveWeightCorrection
 
-
         descentPrediction = PayloadPath()
         descentPrediction.predictDecsentPath(windField, flight[-1])
         
@@ -338,7 +337,7 @@ def runPrediction(flightPoints):
             'latitude':descentPrediction.path[-1].location.latitude
             }
         #sendPrediction(landingPoint);
-        print landingPoint
+        print json.dumps(landingPoint)
         #print {'longitude':formatDMS(dd2dms(landingPoint['longitude'])), 'latitude':formatDMS(dd2dms(landingPoint['latitude']))}
 
     except IOError as e: # Usually just means that the xml isn't online yet.
